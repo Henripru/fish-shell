@@ -1286,17 +1286,15 @@ parse_execution_result_t parse_execution_context_t::run_1_job(const parse_node_t
     }
 
     job_t *j = new job_t(acquire_job_id(), block_io);
-    j->tmodes = tmodes;
-    job_set_flag(j, JOB_CONTROL,
-                 (job_control_mode == JOB_CONTROL_ALL) ||
-                     ((job_control_mode == JOB_CONTROL_INTERACTIVE) && (shell_is_interactive())));
 
+    bool enable_job_control =
+        (job_control_mode == JOB_CONTROL_ALL) ||
+        ((job_control_mode == JOB_CONTROL_INTERACTIVE) && (shell_is_interactive()));
+    bool enable_skip_notification = is_subshell || is_block || is_event || !shell_is_interactive();
+    job_set_flag(j, JOB_CONTROL, enable_job_control);
     job_set_flag(j, JOB_FOREGROUND, !tree.job_should_be_backgrounded(job_node));
-
     job_set_flag(j, JOB_TERMINAL, job_get_flag(j, JOB_CONTROL) && !is_subshell && !is_event);
-
-    job_set_flag(j, JOB_SKIP_NOTIFICATION,
-                 is_subshell || is_block || is_event || !shell_is_interactive());
+    job_set_flag(j, JOB_SKIP_NOTIFICATION, enable_skip_notification);
 
     // Tell the current block what its job is. This has to happen before we populate it (#1394).
     parser->current_block()->job = j;

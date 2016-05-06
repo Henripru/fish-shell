@@ -384,13 +384,14 @@ void exec_job(parser_t &parser, job_t *j) {
 
     // If fish was invoked with -n or --no-execute, then no_exec will be set and we do nothing.
     if (no_exec) {
+        debug(4, L"No exec job %d: '%ls'", j->job_id, j->command_wcstr());
         return;
     }
 
     sigemptyset(&chldset);
     sigaddset(&chldset, SIGCHLD);
 
-    debug(4, L"Exec job '%ls' with id %d", j->command_wcstr(), j->job_id);
+    debug(4, L"Exec job %d: '%ls'", j->job_id, j->command_wcstr());
 
     // Verify that all IO_BUFFERs are output. We used to support a (single, hacked-in) magical input
     // IO_BUFFER used by fish_pager, but now the claim is that there are no more clients and it is
@@ -906,40 +907,45 @@ void exec_job(parser_t &parser, job_t *j) {
                 // output, so that we can truncate the file. Does not apply to /dev/null.
                 bool must_fork = redirection_is_to_real_file(stdout_io.get()) ||
                                  redirection_is_to_real_file(stderr_io.get());
-                if (!must_fork && p->next == NULL) {
-                    const bool stdout_is_to_buffer = stdout_io && stdout_io->io_mode == IO_BUFFER;
-                    const bool no_stdout_output = stdout_buffer.empty();
-                    const bool no_stderr_output = stderr_buffer.empty();
+                if (!must_fork) {
+                    if (p->next == NULL) {
+                        const bool stdout_is_to_buffer =
+                            stdout_io && stdout_io->io_mode == IO_BUFFER;
+                        const bool no_stdout_output = stdout_buffer.empty();
+                        const bool no_stderr_output = stderr_buffer.empty();
 
-                    if (no_stdout_output && no_stderr_output) {
-                        // The builtin produced no output and is not inside of a pipeline. No
-                        // need to fork or even output anything.
-                        debug(3, L"Skipping fork: no output for internal builtin '%ls'",
-                              p->argv0());
-                        fork_was_skipped = true;
-                    } else if (no_stderr_output && stdout_is_to_buffer) {
-                        // The builtin produced no stderr, and its stdout is going to an
-                        // internal buffer. There is no need to fork. This helps out the
-                        // performance quite a bit in complex completion code.
-                        debug(3, L"Skipping fork: buffered output for internal builtin '%ls'",
-                              p->argv0());
+                        if (no_stdout_output && no_stderr_output) {
+                            // The builtin produced no output and is not inside of a pipeline. No
+                            // need to fork or even output anything.
+                            debug(3, L"Skipping fork: no output for internal builtin '%ls'",
+                                  p->argv0());
+                            fork_was_skipped = true;
+                        } else if (no_stderr_output && stdout_is_to_buffer) {
+                            // The builtin produced no stderr, and its stdout is going to an
+                            // internal buffer. There is no need to fork. This helps out the
+                            // performance quite a bit in complex completion code.
+                            debug(3, L"Skipping fork: buffered output for internal builtin '%ls'",
+                                  p->argv0());
 
-                        io_buffer_t *io_buffer = static_cast<io_buffer_t *>(stdout_io.get());
-                        const std::string res = wcs2string(builtin_io_streams->out.buffer());
+                            io_buffer_t *io_buffer = static_cast<io_buffer_t *>(stdout_io.get());
+                            const std::string res = wcs2string(builtin_io_streams->out.buffer());
 
-                        io_buffer->out_buffer_append(res.data(), res.size());
-                        fork_was_skipped = true;
-                    } else if (stdout_io.get() == NULL && stderr_io.get() == NULL) {
-                        // We are writing to normal stdout and stderr. Just do it - no need to
-                        // fork.
-                        debug(3, L"Skipping fork: ordinary output for internal builtin '%ls'",
-                              p->argv0());
-                        const std::string outbuff = wcs2string(stdout_buffer);
-                        const std::string errbuff = wcs2string(stderr_buffer);
-                        bool builtin_io_done = do_builtin_io(outbuff.data(), outbuff.size(),
-                                                             errbuff.data(), errbuff.size());
-                        if (!builtin_io_done && errno != EPIPE) {
-                            show_stackframe(L'E');
+                            io_buffer->out_buffer_append(res.data(), res.size());
+                            fork_was_skipped = true;
+                        } else if (stdout_io.get() == NULL && stderr_io.get() == NULL) {
+                            // We are writing to normal stdout and stderr. Just do it - no need to
+                            // fork.
+                            debug(3, L"Skipping fork: ordinary output for internal builtin '%ls'",
+                                  p->argv0());
+                            const std::string outbuff = wcs2string(stdout_buffer);
+                            const std::string errbuff = wcs2string(stderr_buffer);
+                            bool builtin_io_done = do_builtin_io(outbuff.data(), outbuff.size(),
+                                                                 errbuff.data(), errbuff.size());
+                            if (!builtin_io_done && errno != EPIPE) {
+                                debug(0, L"!builtin_io_done && errno == %d", errno);
+                                show_stackframe(L'E');
+                            }
+                            fork_was_skipped = true;
                         }
                         fork_was_skipped = true;
                     }
@@ -1048,11 +1054,13 @@ void exec_job(parser_t &parser, job_t *j) {
 
                     // A 0 pid means we failed to posix_spawn. Since we have no pid, we'll never get
                     // told when it's exited, so we have to mark the process as failed.
-                    debug(2, L"Fork #%d, pid %d: spawn external command '%s' from '%ls'",
-                          g_fork_count, pid, actual_cmd, file ? file : L"<no file>");
+                    debug(2, L"Fork #%d, job %d, pid %d: spawn external command '%ls' from '%ls'",
+                          g_fork_count, j->job_id, pid, p->actual_cmd.c_str(),
+                          file ? file : L"<no file>");
                     if (pid == 0) {
                         job_mark_process_as_failed(j, p);
                         exec_error = true;
+                        term_steal(j);
                     }
                 } else
 #endif
@@ -1066,8 +1074,9 @@ void exec_job(parser_t &parser, job_t *j) {
                         // safe_launch_process _never_ returns...
                         DIE("safe_launch_process should not have returned");
                     } else {
-                        debug(2, L"Fork #%d, pid %d: external command '%s' from '%ls'\n",
-                              g_fork_count, pid, p->argv0(), file ? file : L"<no file>");
+                        debug(2, L"Fork #%d, job %d, pid %d: external command '%ls' from '%ls'",
+                              g_fork_count, j->job_id, pid, p->actual_cmd.c_str(),
+                              file ? file : L"<no file>");
                         if (pid < 0) {
                             job_mark_process_as_failed(j, p);
                             exec_error = true;
