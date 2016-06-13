@@ -1680,11 +1680,6 @@ bool is_forked_child(void) {
     if (!initial_pid) return false;
 
     bool is_child_of_fork = getpid() != initial_pid;
-    if (is_child_of_fork) {
-        debug(0, "current process (pid %d) is not the top-level shell (pid %d)\n", getpid(),
-              initial_pid);
-        while (1) sleep(10000);
-    }
     return is_child_of_fork;
 }
 
