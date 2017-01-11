@@ -3359,7 +3359,20 @@ int reader_read(int fd, const io_chain_t &io) {
     // If reader_read is called recursively through the '.' builtin, we need to preserve
     // is_interactive. This, and signal handler setup is handled by
     // proc_push_interactive/proc_pop_interactive.
-    int inter = ((fd == STDIN_FILENO) && isatty(STDIN_FILENO));
+    int inter = 0;
+    // This block is a hack to work around https://sourceware.org/bugzilla/show_bug.cgi?id=20632.
+    // See also, commit 396bf12. Without the need for this workaround we would just write:
+    // int inter = ((fd == STDIN_FILENO) && isatty(STDIN_FILENO));
+    if (fd == STDIN_FILENO) {
+        struct termios t;
+        int a_tty = isatty(STDIN_FILENO);
+        if (a_tty) {
+            inter = 1;
+        } else if (tcgetattr(STDIN_FILENO, &t) == -1 && errno == EIO) {
+            redirect_tty_output();
+            inter = 1;
+        }
+    }
     proc_push_interactive(inter);
 
     res = shell_is_interactive() ? read_i() : read_ni(fd, io);
