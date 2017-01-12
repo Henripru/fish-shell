@@ -1710,7 +1710,9 @@ void restore_term_foreground_process_group(void) {
     if (initial_fg_process_group != -1) {
         // This is called during shutdown and from a signal handler. We don't bother to complain on
         // failure.
-        tcsetpgrp(STDIN_FILENO, initial_fg_process_group);
+        if (tcsetpgrp(STDIN_FILENO, initial_fg_process_group) == -1 && errno == EIO) {
+            redirect_tty_output();
+        }
     }
 }
 

@@ -318,7 +318,7 @@ static void term_donate() {
 
     while (1) {
         if (tcsetattr(STDIN_FILENO, TCSANOW, &tty_modes_for_external_cmds) == -1) {
-            if (errno == ENOTTY) redirect_tty_output();
+            if (errno == EIO) redirect_tty_output();
             if (errno != EINTR) {
                 debug(1, _(L"Could not set terminal mode for new job"));
                 wperror(L"tcsetattr");
@@ -347,7 +347,7 @@ static void update_buff_pos(editable_line_t *el, size_t buff_pos) {
 static void term_steal() {
     while (1) {
         if (tcsetattr(STDIN_FILENO, TCSANOW, &shell_modes) == -1) {
-            if (errno == ENOTTY) redirect_tty_output();
+            if (errno == EIO) redirect_tty_output();
             if (errno != EINTR) {
                 debug(1, _(L"Could not set terminal mode for shell"));
                 perror("tcsetattr");
@@ -794,7 +794,7 @@ void restore_term_mode() {
     // Restore the term mode if we own the terminal. It's important we do this before
     // restore_foreground_process_group, otherwise we won't think we own the terminal.
     if (getpid() == tcgetpgrp(STDIN_FILENO)) {
-        if (tcsetattr(STDIN_FILENO, TCSANOW, &terminal_mode_on_startup) == -1 && errno == ENOTTY) {
+        if (tcsetattr(STDIN_FILENO, TCSANOW, &terminal_mode_on_startup) == -1 && errno == EIO) {
             redirect_tty_output();
         }
     }
@@ -1590,8 +1590,9 @@ static void reader_interactive_init() {
         for (unsigned long loop_count = 0;; loop_count++) {
             pid_t owner = tcgetpgrp(STDIN_FILENO);
             shell_pgid = getpgrp();
-            if (owner < 0 && errno == ENOTTY) {
+            if (owner < 0 && errno == EIO) {
                 // No TTY, cannot be interactive?
+                redirect_tty_output();
                 debug(1, _(L"No TTY for interactive shell (tcgetpgrp failed)"));
                 wperror(L"setpgid");
                 exit_without_destructors(1);
@@ -1633,7 +1634,7 @@ static void reader_interactive_init() {
 
     // Grab control of the terminal.
     if (tcsetpgrp(STDIN_FILENO, shell_pgid) == -1) {
-        if (errno == ENOTTY) redirect_tty_output();
+        if (errno == EIO) redirect_tty_output();
         debug(0, _(L"Couldn't grab control of terminal"));
         wperror(L"tcsetpgrp");
         exit_without_destructors(1);
@@ -1643,7 +1644,7 @@ static void reader_interactive_init() {
 
     // Set the new modes.
     if (tcsetattr(0, TCSANOW, &shell_modes) == -1) {
-        if (errno == ENOTTY) redirect_tty_output();
+        if (errno == EIO) redirect_tty_output();
         wperror(L"tcsetattr");
     }
 
@@ -2383,10 +2384,10 @@ const wchar_t *reader_readline(int nchars) {
     reader_repaint();
 
     // Get the current terminal modes. These will be restored when the function returns.
-    tcgetattr(STDIN_FILENO, &old_modes);
+    if (tcgetattr(STDIN_FILENO, &old_modes) == -1 && errno == EIO) redirect_tty_output();
     // Set the new modes.
     if (tcsetattr(0, TCSANOW, &shell_modes) == -1) {
-        if (errno == ENOTTY) redirect_tty_output();
+        if (errno == EIO) redirect_tty_output();
         wperror(L"tcsetattr");
     }
 
@@ -3253,7 +3254,7 @@ const wchar_t *reader_readline(int nchars) {
 
     if (!reader_exit_forced()) {
         if (tcsetattr(0, TCSANOW, &old_modes) == -1) {
-            if (errno == ENOTTY) redirect_tty_output();
+            if (errno == EIO) redirect_tty_output();
             wperror(L"tcsetattr");  // return to previous mode
         }
         set_color(rgb_color_t::reset(), rgb_color_t::reset());
